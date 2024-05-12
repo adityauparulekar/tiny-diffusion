@@ -50,6 +50,49 @@ class MLP(nn.Module):
         x = self.joint_mlp(x)
         return x
 
+def find_scaling(t_big, t_small, num_steps):
+    s_min = 0.001
+    s_max = 1
+    while True:
+        s_curr = np.sqrt(s_min * s_max)
+        curr_time = t_big
+        times = []
+        step_size = 0
+        while curr_time > t_small:
+            step_size = s_curr * (1. - np.exp(-2. * curr_time))
+            times.append(curr_time)
+            curr_time -= step_size
+        curr_time += step_size
+        if len(times) < num_steps:
+            s_max = s_curr
+        elif len(times) > num_steps:
+            s_min = s_curr
+        elif abs(curr_time - t_small) > 1e-6:
+            s_min = s_curr
+        else:
+            break
+    return np.sqrt(s_min * s_max)
+
+def calculate_betas(num_timesteps, num_our_steps, beta_start, beta_end):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    original_betas = torch.linspace(beta_start, beta_end, num_timesteps, dtype=torch.float32)
+    alphas = 1.0 - original_betas
+    alphas_cumprod = torch.cumprod(alphas, dim=0)
+    original_times = -0.5 * torch.log(alphas_cumprod)
+
+    step_size_eps = find_scaling(3.2406, 5.001079e-5, num_our_steps)
+
+    curr_time = original_times[-1]
+    betas = []
+    times = []
+    while curr_time > original_times[0]*1.01:
+        step_size = step_size_eps * (1. - torch.exp(-2. * curr_time))
+        times.append(curr_time.item())
+        betas.append(1 - torch.exp(-2. * step_size))
+        curr_time -= step_size
+
+    return torch.tensor(betas, dtype=torch.float32, device=device)
 
 class NoiseScheduler():
     def __init__(self,
@@ -65,6 +108,8 @@ class NoiseScheduler():
         elif beta_schedule == "quadratic":
             self.betas = torch.linspace(
                 beta_start ** 0.5, beta_end ** 0.5, num_timesteps, dtype=torch.float32, device=device) ** 2
+        elif beta_schedule == "ours":
+            self.betas = calculate_betas(num_timesteps, beta_start, beta_end)
 
         self.alphas = 1.0 - self.betas
         self.alphas_cumprod = torch.cumprod(self.alphas, axis=0)
@@ -142,7 +187,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_epochs", type=int, default=200)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
     parser.add_argument("--num_timesteps", type=int, default=50)
-    parser.add_argument("--beta_schedule", type=str, default="linear", choices=["linear", "quadratic"])
+    parser.add_argument("--beta_schedule", type=str, default="linear", choices=["linear", "quadratic", "ours"])
     parser.add_argument("--embedding_size", type=int, default=128)
     parser.add_argument("--hidden_size", type=int, default=128)
     parser.add_argument("--hidden_layers", type=int, default=3)
