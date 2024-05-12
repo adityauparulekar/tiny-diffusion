@@ -57,14 +57,14 @@ class NoiseScheduler():
                  beta_start=0.0001,
                  beta_end=0.02,
                  beta_schedule="linear"):
-
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_timesteps = num_timesteps
         if beta_schedule == "linear":
             self.betas = torch.linspace(
-                beta_start, beta_end, num_timesteps, dtype=torch.float32)
+                beta_start, beta_end, num_timesteps, dtype=torch.float32, device=device)
         elif beta_schedule == "quadratic":
             self.betas = torch.linspace(
-                beta_start ** 0.5, beta_end ** 0.5, num_timesteps, dtype=torch.float32) ** 2
+                beta_start ** 0.5, beta_end ** 0.5, num_timesteps, dtype=torch.float32, device=device) ** 2
 
         self.alphas = 1.0 - self.betas
         self.alphas_cumprod = torch.cumprod(self.alphas, axis=0)
@@ -127,7 +127,6 @@ class NoiseScheduler():
 
         s1 = s1.reshape(-1, 1)
         s2 = s2.reshape(-1, 1)
-
         return s1 * x_start + s2 * x_noise
 
     def __len__(self):
@@ -137,7 +136,7 @@ class NoiseScheduler():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment_name", type=str, default="base")
-    parser.add_argument("--dataset", type=str, default="dino", choices=["circle", "dino", "line", "moons"])
+    parser.add_argument("--dataset", type=str, default="dino", choices=["circle", "dino", "line", "moons", "square"])
     parser.add_argument("--train_batch_size", type=int, default=32)
     parser.add_argument("--eval_batch_size", type=int, default=1000)
     parser.add_argument("--num_epochs", type=int, default=200)
@@ -150,23 +149,24 @@ if __name__ == "__main__":
     parser.add_argument("--time_embedding", type=str, default="sinusoidal", choices=["sinusoidal", "learnable", "linear", "zero"])
     parser.add_argument("--input_embedding", type=str, default="sinusoidal", choices=["sinusoidal", "learnable", "linear", "identity"])
     parser.add_argument("--save_images_step", type=int, default=1)
+    parser.add_argument("--dataset_size", type=int, default=8000)
     config = parser.parse_args()
 
-    dataset = datasets.get_dataset(config.dataset)
+    dataset = datasets.get_dataset(config.dataset, n=config.dataset_size)
     dataloader = DataLoader(
         dataset, batch_size=config.train_batch_size, shuffle=True, drop_last=True)
-
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = MLP(
         hidden_size=config.hidden_size,
         hidden_layers=config.hidden_layers,
         emb_size=config.embedding_size,
         time_emb=config.time_embedding,
-        input_emb=config.input_embedding)
+        input_emb=config.input_embedding).to(device)
 
     noise_scheduler = NoiseScheduler(
         num_timesteps=config.num_timesteps,
         beta_schedule=config.beta_schedule)
-
+    noise_scheduler.sqrt_alphas_cumprod = noise_scheduler.sqrt_alphas_cumprod.to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=config.learning_rate,
@@ -181,11 +181,11 @@ if __name__ == "__main__":
         progress_bar = tqdm(total=len(dataloader))
         progress_bar.set_description(f"Epoch {epoch}")
         for step, batch in enumerate(dataloader):
-            batch = batch[0]
-            noise = torch.randn(batch.shape)
+            batch = batch[0].to(device)
+            noise = torch.randn(batch.shape).to(device)
             timesteps = torch.randint(
                 0, noise_scheduler.num_timesteps, (batch.shape[0],)
-            ).long()
+            ).long().to(device)
 
             noisy = noise_scheduler.add_noise(batch, noise, timesteps)
             noise_pred = model(noisy, timesteps)
@@ -206,14 +206,15 @@ if __name__ == "__main__":
         if epoch % config.save_images_step == 0 or epoch == config.num_epochs - 1:
             # generate data with the model to later visualize the learning process
             model.eval()
-            sample = torch.randn(config.eval_batch_size, 2)
+            sample = torch.randn(config.eval_batch_size, 2).to(device)
             timesteps = list(range(len(noise_scheduler)))[::-1]
             for i, t in enumerate(tqdm(timesteps)):
-                t = torch.from_numpy(np.repeat(t, config.eval_batch_size)).long()
+                t = torch.from_numpy(np.repeat(t, config.eval_batch_size)).long().to(device)
                 with torch.no_grad():
                     residual = model(sample, t)
                 sample = noise_scheduler.step(residual, t[0], sample)
-            frames.append(sample.numpy())
+            sample_cpu = sample.cpu()
+            frames.append(sample_cpu.numpy())
 
     print("Saving model...")
     outdir = f"exps/{config.experiment_name}"

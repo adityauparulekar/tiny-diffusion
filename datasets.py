@@ -2,16 +2,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from sklearn.datasets import make_moons
 from torch.utils.data import TensorDataset
-
-
-def moons_dataset(n=8000):
-    X, _ = make_moons(n_samples=n, random_state=42, noise=0.03)
-    X[:, 0] = (X[:, 0] + 0.3) * 2 - 1
-    X[:, 1] = (X[:, 1] + 0.3) * 3 - 1
-    return TensorDataset(torch.from_numpy(X.astype(np.float32)))
-
 
 def line_dataset(n=8000):
     rng = np.random.default_rng(42)
@@ -21,20 +12,34 @@ def line_dataset(n=8000):
     X *= 4
     return TensorDataset(torch.from_numpy(X.astype(np.float32)))
 
+def square_dataset(n=8000):
+    rng = np.random.default_rng(42)
+    x = np.ones(n//4)
+    y = rng.uniform(-1, 1, n//4)
+    X1 = np.stack((x, y), axis=1)
+    
+    x = -1 * np.ones(n//4)
+    y = rng.uniform(-1, 1, n//4)
+    X2 = np.stack((x, y), axis=1)
+    
+    y = np.ones(n//4)
+    x = rng.uniform(-1, 1, n//4)
+    X3 = np.stack((x, y), axis=1)
+    
+    y = -1 * np.ones(n//4)
+    x = rng.uniform(-1, 1, n//4)
+    X4 = np.stack((x, y), axis=1)
+
+    X = np.concatenate((X1, X2, X3, X4)) * 3
+    return TensorDataset(torch.from_numpy(X.astype(np.float32)))
 
 def circle_dataset(n=8000):
     rng = np.random.default_rng(42)
-    x = np.round(rng.uniform(-0.5, 0.5, n)/2, 1)*2
-    y = np.round(rng.uniform(-0.5, 0.5, n)/2, 1)*2
-    norm = np.sqrt(x**2 + y**2) + 1e-10
-    x /= norm
-    y /= norm
     theta = 2 * np.pi * rng.uniform(0, 1, n)
-    r = rng.uniform(0, 0.03, n)
-    x += r * np.cos(theta)
-    y += r * np.sin(theta)
+    x = np.cos(theta)
+    y = np.sin(theta)
     X = np.stack((x, y), axis=1)
-    X *= 3
+    X *= 0
     return TensorDataset(torch.from_numpy(X.astype(np.float32)))
 
 
@@ -63,5 +68,7 @@ def get_dataset(name, n=8000):
         return line_dataset(n)
     elif name == "circle":
         return circle_dataset(n)
+    elif name == "square":
+        return square_dataset(n)
     else:
         raise ValueError(f"Unknown dataset: {name}")

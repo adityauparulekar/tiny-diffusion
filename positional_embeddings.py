@@ -12,10 +12,11 @@ class SinusoidalEmbedding(nn.Module):
         self.scale = scale
 
     def forward(self, x: torch.Tensor):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         x = x * self.scale
         half_size = self.size // 2
         emb = torch.log(torch.Tensor([10000.0])) / (half_size - 1)
-        emb = torch.exp(-emb * torch.arange(half_size))
+        emb = torch.exp(-emb * torch.arange(half_size)).to(device)
         emb = x.unsqueeze(-1) * emb.unsqueeze(0)
         emb = torch.cat((torch.sin(emb), torch.cos(emb)), dim=-1)
         return emb
