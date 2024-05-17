@@ -27,19 +27,17 @@ class Block(nn.Module):
 
 class MLP(nn.Module):
     def __init__(self, hidden_size: int = 128, hidden_layers: int = 3, emb_size: int = 128,
-                 time_emb: str = "sinusoidal", input_emb: str = "sinusoidal", input_dim: int = 2):
+                 input_emb: str = "sinusoidal", input_dim: int = 2):
         super().__init__()
 
-        self.time_mlp = PositionalEmbedding(emb_size, time_emb)
         self.input_mlp1 = PositionalEmbedding(emb_size, input_emb, scale=25.0)
         self.input_dim = input_dim
         if self.input_dim == 2:
             self.input_mlp2 = PositionalEmbedding(emb_size, input_emb, scale=25.0)
 
-            concat_size = len(self.time_mlp.layer) + \
-                len(self.input_mlp1.layer) + len(self.input_mlp2.layer)
+            concat_size = len(self.input_mlp1.layer) + len(self.input_mlp2.layer)
         else:
-            concat_size = len(self.time_mlp.layer) + len(self.input_mlp1.layer)
+            concat_size = len(self.input_mlp1.layer)
         layers = [nn.Linear(concat_size, hidden_size).double(), nn.GELU().double()]
         for _ in range(hidden_layers):
             layers.append(Block(hidden_size).double())
@@ -50,14 +48,11 @@ class MLP(nn.Module):
         if self.input_dim == 2:
             x1_emb = self.input_mlp1(x[:, 0])
             x2_emb = self.input_mlp2(x[:, 1])
-            t_emb = self.time_mlp(t)
-            x = torch.cat((x1_emb, x2_emb, t_emb), dim=-1)
+            x = torch.cat((x1_emb, x2_emb), dim=-1)
             x = self.joint_mlp(x)
         else:
             x1_emb = self.input_mlp1(x[:, 0])
-            t_emb = self.time_mlp(t)
-            x = torch.cat((x1_emb, t_emb), dim=-1)
-            x = self.joint_mlp(x)
+            x = self.joint_mlp(x1_emb)
         return x
 
 def find_scaling(t_big, t_small, num_steps):
@@ -222,92 +217,61 @@ if __name__ == "__main__":
     dataloader = DataLoader(
         dataset, batch_size=config.train_batch_size, shuffle=True, drop_last=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = MLP(
-        hidden_size=config.hidden_size,
-        hidden_layers=config.hidden_layers,
-        emb_size=config.embedding_size,
-        time_emb=config.time_embedding,
-        input_emb=config.input_embedding,
-        input_dim=config.dimension).to(device)
-
     noise_scheduler = NoiseScheduler(
         num_timesteps=config.num_timesteps,
         beta_schedule=config.beta_schedule)
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=config.learning_rate,
-    )
+    for t in range(len(noise_scheduler.times)):
+        model = MLP(
+            hidden_size=config.hidden_size,
+            hidden_layers=config.hidden_layers,
+            emb_size=config.embedding_size,
+            input_emb=config.input_embedding,
+            input_dim=config.dimension).to(device)
 
-    global_step = 0
-    frames = []
-    losses = []
-    print("Training model...")
-    for epoch in range(config.num_epochs):
-        model.train()
-        progress_bar = tqdm(total=len(dataloader))
-        progress_bar.set_description(f"Epoch {epoch}")
-        for step, batch in enumerate(dataloader):
-            batch = batch[0].to(device)
-            noise = torch.randn(batch.shape, dtype=torch.float64).to(device)
-            timesteps = torch.randint(
-                0, noise_scheduler.num_timesteps, (batch.shape[0],)
-            ).long().to(device)
-            noisy = noise_scheduler.add_noise(batch, noise, timesteps)
-            noise_pred = model(noisy, timesteps)
-            # stds = torch.sqrt(torch.sqrt(1 - torch.exp(-2 * noise_scheduler.times[timesteps]))).detach()
-            loss = F.mse_loss(noise_pred, noise)
-            # loss = F.mse_loss((noise_pred - noise).squeeze() / stds, torch.zeros_like((noise_pred - noise).squeeze() / stds))
-            # print(loss.dtype, stds.dtype)
-            loss.backward()
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=config.learning_rate,
+        )
 
-            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            optimizer.zero_grad()
+        global_step = 0
+        frames = []
+        losses = []
+        print(f"Training model {t}...")
+        for epoch in range(config.num_epochs):
+            model.train()
+            progress_bar = tqdm(total=len(dataloader))
+            progress_bar.set_description(f"Epoch {epoch}")
+            for step, batch in enumerate(dataloader):
+                batch = batch[0].to(device)
+                noise = torch.randn(batch.shape, dtype=torch.float64).to(device)
+                timesteps = (torch.ones_like(batch, dtype=torch.float64) * t).to(device)
+                # timesteps = torch.randint(
+                #     0, noise_scheduler.num_timesteps, (batch.shape[0],)
+                # ).long().to(device)
+                noisy = noise_scheduler.add_noise(batch, noise, timesteps)
+                noise_pred = model(noisy, timesteps)
+                # stds = torch.sqrt(torch.sqrt(1 - torch.exp(-2 * noise_scheduler.times[timesteps]))).detach()
+                loss = F.mse_loss(noise_pred, noise)
+                # loss = F.mse_loss((noise_pred - noise).squeeze() / stds, torch.zeros_like((noise_pred - noise).squeeze() / stds))
+                # print(loss.dtype, stds.dtype)
+                loss.backward()
 
-            progress_bar.update(1)
-            logs = {"loss": loss.detach().item(), "step": global_step}
-            losses.append(loss.detach().item())
-            progress_bar.set_postfix(**logs)
-            global_step += 1
-        progress_bar.close()
+                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                optimizer.zero_grad()
 
-        if epoch % config.save_images_step == 0 or epoch == config.num_epochs - 1:
-            # generate data with the model to later visualize the learning process
-            model.eval()
-            sample = torch.randn(config.eval_batch_size, 2).to(device)
-            timesteps = list(range(len(noise_scheduler)))[::-1]
-            for i, t in enumerate(tqdm(timesteps)):
-                t = torch.from_numpy(np.repeat(t, config.eval_batch_size)).long().to(device)
-                with torch.no_grad():
-                    residual = model(sample, t)
-                sample = noise_scheduler.step(residual, t[0], sample)
-            sample_cpu = sample.cpu()
-            frames.append(sample_cpu.numpy())
+                progress_bar.update(1)
+                logs = {"loss": loss.detach().item(), "step": global_step}
+                losses.append(loss.detach().item())
+                progress_bar.set_postfix(**logs)
+                global_step += 1
+            progress_bar.close()
 
-    print("Saving model...")
-    outdir = f"exps/{config.experiment_name}"
-    os.makedirs(outdir, exist_ok=True)
-    torch.save(model.state_dict(), f"{outdir}/model.pth")
+        print("Saving model...")
+        outdir = f"exps/{config.experiment_name}"
+        os.makedirs(outdir, exist_ok=True)
+        torch.save(model.state_dict(), f"{outdir}/model{t}.pth")
 
-    print("Saving images...")
-    imgdir = f"{outdir}/images"
-    os.makedirs(imgdir, exist_ok=True)
-    frames = np.stack(frames)
-    xmin, xmax = -6, 6
-    ymin, ymax = -6, 6
-    for i, frame in enumerate(frames):
-        plt.figure(figsize=(10, 10))
-        plt.scatter(frame[:, 0], frame[:, 1])
-        plt.xlim(xmin, xmax)
-        plt.ylim(ymin, ymax)
-        plt.savefig(f"{imgdir}/{i:04}.png")
-        plt.close()
-
-    print("Saving loss as numpy array...")
-    np.save(f"{outdir}/loss.npy", np.array(losses))
-
-    print("Saving frames...")
-    np.save(f"{outdir}/frames.npy", frames)
 
 # class NewNoiseScheduler():
 #     def __init__(self,
