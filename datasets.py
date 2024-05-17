@@ -33,15 +33,18 @@ def square_dataset(n=8000):
     X = np.concatenate((X1, X2, X3, X4)) * 3
     return TensorDataset(torch.from_numpy(X.astype(np.float32)))
 
-def circle_dataset(n=8000):
+def circle_dataset(n=8000, r=0):
     rng = np.random.default_rng(42)
     theta = 2 * np.pi * rng.uniform(0, 1, n)
     x = np.cos(theta)
     y = np.sin(theta)
     X = np.stack((x, y), axis=1)
-    X *= 0
+    X *= r
     return TensorDataset(torch.from_numpy(X.astype(np.float32)))
-
+    
+def point_1d_dataset(n=8000, r=0):
+    x = np.zeros((n, 1))
+    return TensorDataset(torch.from_numpy(x.astype(np.float64)))
 
 def dino_dataset(n=8000):
     df = pd.read_csv("static/DatasaurusDozen.tsv", sep="\t")
@@ -70,5 +73,7 @@ def get_dataset(name, n=8000):
         return circle_dataset(n)
     elif name == "square":
         return square_dataset(n)
+    elif name == "point1d":
+        return point_1d_dataset(n)
     else:
         raise ValueError(f"Unknown dataset: {name}")
