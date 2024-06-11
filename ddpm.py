@@ -86,7 +86,8 @@ def calculate_betas(num_timesteps, num_our_steps, beta_start, beta_end):
     alphas_cumprod = torch.cumprod(alphas, dim=0)
     original_times = -0.5 * torch.log(alphas_cumprod)
     big_time = original_times[-1].item()
-    small_time = original_times[0].item()
+    small_time = 1e-11
+
     step_size_eps = find_scaling(big_time, small_time, num_our_steps)
     curr_time = original_times[-1]
     betas = []
@@ -94,7 +95,7 @@ def calculate_betas(num_timesteps, num_our_steps, beta_start, beta_end):
     step_sizes = []
     step_size_eps = np.float64(step_size_eps)
     curr_time = np.float64(curr_time)
-    while curr_time > 1e-9:
+    while curr_time > small_time:
         step_size = step_size_eps * (1. - np.exp(-2. * curr_time))
         step_sizes.append(step_size.item())
         times.append(curr_time.item())
@@ -104,7 +105,7 @@ def calculate_betas(num_timesteps, num_our_steps, beta_start, beta_end):
     alphas = 1.0 - torch.tensor(betas[::-1], dtype=torch.float64)
     alphas_cumprod = torch.cumprod(alphas, dim=0)
     original_times = -0.5 * torch.log(alphas_cumprod)
-    print("MIN GAMMA", np.sqrt(1 - np.exp(-2*original_times[0])), "LEN", len(original_times))
+    print("sMIN GAMMA", np.sqrt(1 - np.exp(-2*original_times[0])), "LEN", len(original_times))
     return torch.tensor(betas[::-1], dtype=torch.float64, device=device), original_times.to(device)
 
 class NoiseScheduler():
@@ -220,57 +221,64 @@ if __name__ == "__main__":
     noise_scheduler = NoiseScheduler(
         num_timesteps=config.num_timesteps,
         beta_schedule=config.beta_schedule)
+    losses = []
     for t in range(len(noise_scheduler.times)):
+        if t < 11:
+            num_epochs = 30
+        else:
+            num_epochs = 30
+    # for t in [0]:
         model = MLP(
             hidden_size=config.hidden_size,
             hidden_layers=config.hidden_layers,
             emb_size=config.embedding_size,
             input_emb=config.input_embedding,
             input_dim=config.dimension).to(device)
+        
+        std = torch.sqrt(1 - torch.exp(-2 * noise_scheduler.times[t]))
 
-        optimizer = torch.optim.AdamW(
+        optimizer = torch.optim.Adam(
             model.parameters(),
-            lr=config.learning_rate,
+            lr=1e-3,
+            weight_decay=0,
         )
 
         global_step = 0
         frames = []
-        losses = []
         print(f"Training model {t}...")
+        # for epoch in range(num_epochs):
         for epoch in range(config.num_epochs):
             model.train()
-            progress_bar = tqdm(total=len(dataloader))
-            progress_bar.set_description(f"Epoch {epoch}")
+            # progress_bar = tqdm(total=len(dataloader))
+            # progress_bar.set_description(f"Epoch {epoch}")
             for step, batch in enumerate(dataloader):
                 batch = batch[0].to(device)
                 noise = torch.randn(batch.shape, dtype=torch.float64).to(device)
-                timesteps = (torch.ones_like(batch, dtype=torch.float64) * t).to(device)
-                # timesteps = torch.randint(
-                #     0, noise_scheduler.num_timesteps, (batch.shape[0],)
-                # ).long().to(device)
+                timesteps = (torch.ones((batch.shape[0],), dtype=torch.int32) * t).long().to(device)
+
                 noisy = noise_scheduler.add_noise(batch, noise, timesteps)
                 noise_pred = model(noisy, timesteps)
-                # stds = torch.sqrt(torch.sqrt(1 - torch.exp(-2 * noise_scheduler.times[timesteps]))).detach()
                 loss = F.mse_loss(noise_pred, noise)
-                # loss = F.mse_loss((noise_pred - noise).squeeze() / stds, torch.zeros_like((noise_pred - noise).squeeze() / stds))
-                # print(loss.dtype, stds.dtype)
                 loss.backward()
 
                 nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 optimizer.zero_grad()
 
-                progress_bar.update(1)
+                # progress_bar.update(1)
                 logs = {"loss": loss.detach().item(), "step": global_step}
-                losses.append(loss.detach().item())
-                progress_bar.set_postfix(**logs)
+                # progress_bar.set_postfix(**logs)
                 global_step += 1
-            progress_bar.close()
-
+            # progress_bar.close()
+        print("END LOSS WAS", loss.detach().item())
+        losses.append(loss.detach().item())
         print("Saving model...")
         outdir = f"exps/{config.experiment_name}"
+        
         os.makedirs(outdir, exist_ok=True)
         torch.save(model.state_dict(), f"{outdir}/model{t}.pth")
+    print("Saving loss as numpy array...")
+    np.save(f"{outdir}/loss.npy", np.array(losses))
 
 
 # class NewNoiseScheduler():

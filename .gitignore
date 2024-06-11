@@ -1,2 +1,4 @@
 __pycache__/
+exps/*
+exps_temp/*
 .ipynb_checkpoints/

@@ -31,7 +31,7 @@ def square_dataset(n=8000):
     X4 = np.stack((x, y), axis=1)
 
     X = np.concatenate((X1, X2, X3, X4)) * 3
-    return TensorDataset(torch.from_numpy(X.astype(np.float32)))
+    return TensorDataset(torch.from_numpy(X.astype(np.float64)))
 
 def circle_dataset(n=8000, r=0):
     rng = np.random.default_rng(42)
@@ -40,7 +40,7 @@ def circle_dataset(n=8000, r=0):
     y = np.sin(theta)
     X = np.stack((x, y), axis=1)
     X *= r
-    return TensorDataset(torch.from_numpy(X.astype(np.float32)))
+    return TensorDataset(torch.from_numpy(X.astype(np.float64)))
     
 def point_1d_dataset(n=8000, r=0):
     x = np.zeros((n, 1))
